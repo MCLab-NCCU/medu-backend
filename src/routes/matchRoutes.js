@@ -6,7 +6,7 @@ const auth = require('../middlewares/authenticationMiddleware');
 
 router.post('/like/:targetUserId', auth, matchController.likeUser);
 router.post('/dislike/:targetUserId', auth, matchController.dislikeUser);
-router.get('/matches', auth, matchController.getMatches);
-router.get('/pending', auth, matchController.getPendingLikes);
+router.get('/friendlist', auth, matchController.getFriendListByUserId);
+router.get('/matchcard', auth, matchController.getMatchCardByUserId);
 
 module.exports = router;

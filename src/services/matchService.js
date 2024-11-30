@@ -1,72 +1,123 @@
 // services/matchService.js
-const User = require('../models/User');
+const Match = require('../models/Match');
+const userService = require('../services/userService');
 const APIError = require('../errors/APIError');
 const mongoose = require('mongoose');
 
-exports.likeUser = async (userId, targetUserId) => {
-    if (userId === targetUserId) {
-        throw new APIError(400, '不能對自己進行喜歡操作');
+exports.updateUserMatchStatus = async (fromUserId, toUserId, status) => {
+    if (fromUserId === toUserId) {
+        throw new APIError(400, '不能對自己進行操作');
     }
 
-    const userIdObj = mongoose.Types.ObjectId(userId);
-    const targetUserIdObj = mongoose.Types.ObjectId(targetUserId);
-
-    const session = await mongoose.startSession();
-    session.startTransaction();
+    const fromUserObjectId = mongoose.Types.ObjectId.createFromHexString(fromUserId);
+    const toUserObjectId = mongoose.Types.ObjectId.createFromHexString(toUserId);
 
     try {
-        const user = await User.findById(userId).session(session);
-        const targetUser = await User.findById(targetUserId).session(session);
+        const fromUser = await userService.getUserById(fromUserObjectId);
+        const toUser = await userService.getUserById(toUserObjectId);
 
-        if (!user || !targetUser) {
+        if (!fromUser || !toUser) {
             throw new APIError(404, '用戶不存在');
         }
 
-        // 更新 likedUsers
-        await User.updateOne(
-            { _id: userIdObj },
-            { $addToSet: { 'profile.interactions.likedUsers': targetUserIdObj } }
-        ).session(session);
+        let match = await Match.findOne({
+            $or: [
+                { $and: [{ userAId: fromUserObjectId }, { userBId: toUserObjectId }] },
+                { $and: [{ userAId: toUserObjectId }, { userBId: fromUserObjectId }] },
+            ],
+        });
 
-        // 檢查是否互相喜歡
-        if (targetUser.profile.interactions.likedUsers.includes(userIdObj)) {
-            // 互相喜歡，建立配對
-            await User.updateOne(
-                { _id: userIdObj },
-                { $addToSet: { 'profile.interactions.matches': targetUserIdObj } }
-            ).session(session);
-
-            await User.updateOne(
-                { _id: targetUserIdObj },
-                { $addToSet: { 'profile.interactions.matches': userIdObj } }
-            ).session(session);
+        if (match) {
+            if (match.userAId.equals(fromUserObjectId)) {
+                match.matchStatus.userAtoBstatus = status;
+            } else if (match.userBId.equals(fromUserObjectId)) {
+                match.matchStatus.userBtoAstatus = status;
+            }
+        } else {
+            match = new Match({
+                userAId: fromUserObjectId,
+                userBId: toUserObjectId,
+                matchStatus: {
+                    userAtoBstatus: status,
+                    userBtoAstatus: "pending"
+                }
+            });
         }
 
-        await session.commitTransaction();
-        session.endSession();
+        await match.save();
     } catch (error) {
-        await session.abortTransaction();
-        session.endSession();
         throw error;
     }
+}; 
+
+exports.getFriendListByUserId = async (userId) => {
+    try {
+        // const user = await User.findById(userId).session(session);
+        const friendList = await Match.find({
+            $and: [
+                { "matchStatus.userAtoBstatus": "like" },
+                { "matchStatus.userBtoAstatus": "like" },
+            ],
+            $or: [
+                { userAId: userId },
+                { userBId: userId }
+            ]
+        }).lean();
+        
+        let friendIdList = new Set();
+        
+        friendList.forEach((element) => {
+            if (element.userAId == userId) {
+                friendIdList.add(element.userBId)
+            } else {
+                friendIdList.add(element.userAId)
+            }
+        });
+
+        return Array.from(friendIdList);
+        
+    } catch (error) {
+        console.error("Error fetching matches:", error);
+        throw new Error("Failed to fetch matches");
+    }
 };
 
-exports.dislikeUser = async (userId, targetUserId) => {
-    if (userId === targetUserId) {
-        throw new APIError(400, '不能對自己進行不喜歡操作');
-    }
+exports.getMatchCardByUserId = async (userId) => {
+    const userObjectId = mongoose.Types.ObjectId.createFromHexString(userId);
+    const checkUserSet = new Set();
 
-    const user = await User.findById(userId);
-    if (!user) {
-        throw new APIError(404, '用戶不存在');
-    }
+    try {
+        let randomUser = null;
 
-    const targetIdStr = targetUserId.toString();
+        while (!randomUser) {
+            const user = await userService.getRandomUserExcludeCollection(checkUserSet);
 
-    // 更新 dislikedUsers
-    if (!user.profile.interactions.dislikedUsers.some(id => id.toString() === targetIdStr)) {
-        user.profile.interactions.dislikedUsers.push(targetUserId);
-    }
+            if (!user) {
+                return null;
+            }
 
-    await user.save();
+            checkUserSet.add(user._id.toString());
+
+            const match = await Match.findOne({
+                $or: [
+                    { $and: [{userAId : userObjectId}, {userBId : user._id}] },
+                    { $and: [{userAId : user._id}, {userBId : userObjectId}] }
+                ]
+            });
+
+            if (
+                !match ||
+                (match.userAId.equals(userObjectId) && match.matchStatus.userAtoBstatus === "pending") ||
+                (match.userBId.equals(userObjectId) && match.matchStatus.userBtoAstatus === "pending")
+            ) {
+                randomUser = user; // 找到符合條件的用戶
+            }
+        }
+
+        return randomUser.profile;
+    } catch (error) {
+        console.error("Error fetching match cards:", error);
+        throw new Error("Failed to fetch match cards");
+    } 
 };
+

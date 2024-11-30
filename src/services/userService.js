@@ -77,4 +77,30 @@ exports.login = async (username, password) => {
     return token;
 }
 
+exports.getUserById = async (userId) => {
+    const user = await User.findById(userId);
+    if (!user) {
+        throw new APIError(400, "用戶不存在");
+    }
+    return user;
+}
 
+exports.getRandomUserExcludeCollection = async (excludeCollection) => {
+
+    if (!(excludeCollection instanceof Set)) {
+        throw new Error("excludeCollection must be a Set");
+    }
+
+
+    const excludeArray = Array.from(excludeCollection);
+    if (excludeArray.length >= await User.countDocuments()) {
+        return null; 
+    }
+
+    const randomUser = await User.aggregate([
+        { $match: { _id: { $nin: excludeArray.map(id => mongoose.Types.ObjectId(id)) } } },
+        { $sample: { size: 1 } }
+    ]);
+
+    return randomUser.length > 0 ? randomUser[0] : null;
+}
